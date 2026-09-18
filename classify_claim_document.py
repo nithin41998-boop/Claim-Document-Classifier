@@ -3,7 +3,7 @@
 classify_claim_document.py
 Classifies an insurance-claim attachment (image) into one of Truuth's
 established claim-document categories, using a vision-capable LLM
-(Claude Haiku via AWS Bedrock). This is a CLOSED-LIST classifier -- it
+(GPT-5.6 Luna via AWS Bedrock). This is a CLOSED-LIST classifier -- it
 picks the single best-matching category from categories.txt (in the
 same folder as this script), or "Unclassified" if genuinely nothing
 fits.
@@ -56,9 +56,8 @@ def classify(image_path):
     category_pairs = load_categories_with_descriptions()
     categories = [name for name, _ in category_pairs]
     try:
-        import boto3
-        session = boto3.Session()
-        client = session.client("bedrock-runtime", region_name="ap-southeast-2")
+        from openai import OpenAI
+        client = OpenAI()
 
         with open(image_path, "rb") as f:
             image_bytes = f.read()
@@ -90,33 +89,43 @@ def classify(image_path):
             "If none of the categories genuinely fit, respond with exactly: Unclassified"
         ]
         prompt = "\n".join(prompt_lines)
+        def call_luna(max_tok):
+            resp = client.chat.completions.create(
+                model="global.openai.gpt-5.6-luna",
+                max_completion_tokens=max_tok,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}}
+                    ]
+                }]
+            )
+            return resp
 
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 40,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": image_b64}},
-                    {"type": "text", "text": prompt}
-                ]
-            }]
-        }
-        response = client.invoke_model(
-            modelId="au.anthropic.claude-haiku-4-5-20251001-v1:0",
-            body=json.dumps(body)
-        )
-        result = json.loads(response["body"].read())
+        response = call_luna(40)
+        content = response.choices[0].message.content
 
-        usage = result.get("usage", {})
-        in_tok = usage.get("input_tokens", 0)
-        out_tok = usage.get("output_tokens", 0)
+        if content is None:
+            # Likely spent the whole budget on invisible reasoning tokens
+            # with none left for the visible answer -- retry once with a
+            # much larger budget rather than defaulting every call to it.
+            response = call_luna(400)
+            content = response.choices[0].message.content
+
+        in_tok = response.usage.prompt_tokens
+        out_tok = response.usage.completion_tokens
         log_path = os.environ.get("TOKEN_LOG_FILE")
         if log_path:
             with open(log_path, "a") as lf:
                 lf.write(f"{in_tok},{out_tok}\n")
 
-        label = result["content"][0]["text"].strip()
+        if content is None:
+            return "Unclassified"
+
+        label = content.strip()
+
+
 
         if label in categories:
             return label
