@@ -68,13 +68,13 @@ Saps report
 Call recordings
 Broker correpondence
 Client correpondence
-Service provider Correspondence, emails, messages
+Service provider correpondence
 Assessor correpondence
 Investigator correpondence
-Moderator Correspondence, emails, messages
-Salvage Correspondence, emails, messages
+Moderator correpondence
+Salvage correpondence
 Sasria correpondence
-Ombudsman Correspondence, emails, messages
+Ombudsman correpondence
 TP docs
 TP summons
 TP release

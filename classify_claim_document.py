@@ -18,6 +18,7 @@ Output: a single line to stdout: the matched category name, or "Unclassified".
 """
 
 import sys
+import traceback
 import os
 import base64
 import json
@@ -65,7 +66,7 @@ def classify(image_path):
         if img is None:
             return "Unclassified"
         h, w = img.shape[:2]
-        scale = min(1.0, 1024 / max(h, w))
+        scale = min(1.0, 1600 / max(h, w))
         if scale < 1.0:
             img = cv2.resize(img, (int(w * scale), int(h * scale)))
         ok, buf = cv2.imencode(".jpg", img)
@@ -85,6 +86,9 @@ def classify(image_path):
             "",
             "If the document could reasonably fit more than one category, prefer the category that most specifically describes what the document actually is (e.g. its stated subject, sender type, or purpose) over a category based only on tone, urgency, or writing style.",
             "Read any visible text carefully. If the document has a clear title, header, or status field (e.g. \"CLAIM APPROVAL\", \"Claim Status: APPROVED\"), that should take priority over other details mentioned in the body when choosing the category. Respond with ONLY the exact category text from the list above, no other words, no punctuation, no explanation.",
+            "For any correspondence-type category (Client, Broker, Assessor, Investigator, Moderator, Salvage, Sasria, or Ombudsman correspondence), decide based on who this specific document is addressed to or sent from, not based on any other party named within its body.",
+            "More generally, if a document is written in letter or email form -- with a greeting, a specific named addressee, and a sign-off -- AND it explicitly responds to or references a prior communication from that party (e.g. thanking them for their email or query, or replying RE: their message), prefer the correspondence category matching who it is addressed to or sent from, even if its content also authorises an action, confirms a quote, or serves some other purpose. If the letter instead originates or announces something (such as an authorisation, a quote, a settlement/release offer, or an instruction) without referencing a prior communication from the addressee, use the purpose-based category (such as Authorisation letter, Assessed quote, or Release Offer) instead, even though it is addressed to a specific named party.",
+            "Similarly, for photos: if an image clearly shows content matching a more specific photo category -- such as a particular scratch/dent facing direction, the complete damaged panel, forced-entry damage, or damage submitted for digital assessment -- prefer the more specific photo category over a generic one like Photos from clients or Asessement photos, even though the client or assessor is the one who submitted it.",
             "",
             "If none of the categories genuinely fit, respond with exactly: Unclassified"
         ]
@@ -106,10 +110,17 @@ def classify(image_path):
         response = call_luna(40)
         content = response.choices[0].message.content
 
-        if content is None:
-            # Likely spent the whole budget on invisible reasoning tokens
-            # with none left for the visible answer -- retry once with a
-            # much larger budget rather than defaulting every call to it.
+        needs_retry = content is None
+        if not needs_retry:
+            trial_label = content.strip()
+            if trial_label not in categories and trial_label.lower() != "unclassified":
+                needs_retry = True
+
+        if needs_retry:
+            # Either the whole budget went on invisible reasoning tokens with
+            # none left for the visible answer, or the response was cut off
+            # mid-way through a long category name -- retry once with a much
+            # larger budget rather than defaulting every call to it.
             response = call_luna(400)
             content = response.choices[0].message.content
 
@@ -124,6 +135,8 @@ def classify(image_path):
             return "Unclassified"
 
         label = content.strip()
+        if os.environ.get("DEBUG_LABEL"):
+            print(f"RAW LABEL: {label!r}", file=sys.stderr)
 
 
 
@@ -133,9 +146,12 @@ def classify(image_path):
             if c.lower() == label.lower():
                 return c
         return "Unclassified"
-    except Exception:
+    except Exception as e:
+        print(f"CLASSIFY ERROR on {image_path}: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return "Unclassified"
 
 
 if __name__ == "__main__":
     print(classify(sys.argv[1]))
+
